@@ -1,0 +1,805 @@
+/* ==========================================================================
+   BANCO DE DADOS - 2º BIMESTRE - RESUMO EXPLICADO
+   INSERT, SELECT, LIGAÇÃO NO WHERE, JOINS, AGRUPAMENTO, UNION E VIEW
+   ==========================================================================
+
+   COMO LER ESTE ARQUIVO
+   - Tudo que está entre /* e */ ou depois de -- é comentário: o banco ignora.
+   - Cada assunto começa com o MODELO GENÉRICO (NOME_DA_TABELA1, COLUNA1...)
+     e depois vem o EXEMPLO REAL com as tabelas da aula.
+   - No fim de cada assunto estão os exercícios das listas do 2º bimestre
+     resolvidos e comentados.
+   - O arquivo roda inteiro, de cima pra baixo, num banco PostgreSQL vazio:
+       docker exec -it aula-sql psql -U postgres -c "CREATE DATABASE estudo"
+       docker cp Resumo_2Bim_Explicado.txt aula-sql:/resumo.sql
+       docker exec -it aula-sql psql -U postgres -d estudo -f /resumo.sql
+
+   AS TABELAS E COMO ELAS SE LIGAM (FK -> PK)
+
+     CIDADE (ID)
+       ^                 ^
+       | CIDADE_ID       | CIDADE_ID
+     CLIENTE (ID)      FORNECEDOR (ID)
+       ^                 ^
+       | CLIENTE_ID      | FORNECEDOR_ID
+     VENDA (ID)        COMPRA (ID)
+       ^                 ^
+       | VENDA_ID        | COMPRA_ID
+     VENDA_ITENS       COMPRA_ITENS
+       | PRODUTO_ID      | PRODUTO_ID
+       v                 v
+     PRODUTO (ID) <------+
+
+     CT_RECEBER.VENDA_ID -> VENDA.ID
+
+   Todo JOIN que você escrever anda por uma dessas setas.
+   ========================================================================== */
+
+
+/* ==========================================================================
+   PARTE 0 - CRIAÇÃO DAS TABELAS (igual ao script.sql da aula)
+   ==========================================================================
+
+   MODELO:
+     CREATE TABLE NOME_DA_TABELA (
+       COLUNA1 TIPO PRIMARY KEY,               -- chave primária: identifica a linha
+       COLUNA2 TIPO,
+       FOREIGN KEY (COLUNA2) REFERENCES OUTRA_TABELA(ID)   -- chave estrangeira
+     );
+*/
+
+CREATE TABLE CIDADE(
+  ID   INT PRIMARY KEY,
+  NOME VARCHAR(100),
+  UF   CHAR(2)
+);
+
+CREATE TABLE FORNECEDOR(
+  ID        INT NOT NULL PRIMARY KEY,
+  CIDADE_ID INT,                         -- aponta pra CIDADE.ID
+  NOME      VARCHAR(100),
+  ENDERECO  VARCHAR(150),
+  FONE      VARCHAR(20),
+  DT_CAD    DATE,
+  CONSTRAINT FK_FORNECEDOR_CIDADE FOREIGN KEY(CIDADE_ID) REFERENCES CIDADE(ID)
+);
+
+CREATE TABLE COMPRA(
+  ID            INT NOT NULL PRIMARY KEY,
+  FORNECEDOR_ID INT,                     -- aponta pra FORNECEDOR.ID
+  DATA_EMICAO   DATE,
+  VALOR_TOTAL   DECIMAL(10,2),
+  FOREIGN KEY(FORNECEDOR_ID) REFERENCES FORNECEDOR(ID)
+);
+
+CREATE TABLE CLIENTE(
+  ID        INT NOT NULL PRIMARY KEY,
+  CIDADE_ID INT,                         -- aponta pra CIDADE.ID
+  NOME      VARCHAR(100),
+  ENDERECO  VARCHAR(150),
+  FONE      VARCHAR(20),
+  DT_NASC   DATE,
+  FOREIGN KEY(CIDADE_ID) REFERENCES CIDADE(ID)
+);
+
+CREATE TABLE PRODUTO(
+  ID        INT NOT NULL,
+  DESCRICAO VARCHAR(150),
+  VALOR     DECIMAL(10,2),
+  QT        DECIMAL(10,3),
+  PRIMARY KEY (ID)
+);
+
+CREATE TABLE VENDA(
+  ID          INT NOT NULL PRIMARY KEY,
+  CLIENTE_ID  INT,                       -- aponta pra CLIENTE.ID (pode ficar NULL)
+  DATA_EMICAO DATE,
+  VALOR_TOTAL DECIMAL(10,2),
+  FOREIGN KEY(CLIENTE_ID) REFERENCES CLIENTE(ID)
+);
+
+-- tabela "do meio": liga VENDA com PRODUTO (uma venda tem vários produtos)
+CREATE TABLE VENDA_ITENS(
+  PRODUTO_ID INT NOT NULL,
+  VENDA_ID   INT NOT NULL,
+  VL_UNIT    DECIMAL(10,2),
+  QT         INT NOT NULL,
+  VL_TOTAL   DECIMAL(10,2),
+  PRIMARY KEY (PRODUTO_ID, VENDA_ID)    -- chave composta: o mesmo produto não repete na mesma venda
+);
+
+-- mesma ideia, do lado das compras
+CREATE TABLE COMPRA_ITENS(
+  PRODUTO_ID INT NOT NULL,
+  COMPRA_ID  INT NOT NULL,
+  VL_UNIT    DECIMAL(10,2),
+  QT         INT NOT NULL,
+  VL_TOTAL   DECIMAL(10,2),
+  PRIMARY KEY (PRODUTO_ID, COMPRA_ID)
+);
+
+-- FKs criadas depois, com ALTER TABLE (outra forma de criar a mesma coisa)
+ALTER TABLE VENDA_ITENS  ADD CONSTRAINT FK_VENDA_ITENS_VENDA    FOREIGN KEY (VENDA_ID)   REFERENCES VENDA(ID);
+ALTER TABLE VENDA_ITENS  ADD CONSTRAINT FK_VENDA_ITENS_PRODUTO  FOREIGN KEY (PRODUTO_ID) REFERENCES PRODUTO(ID);
+ALTER TABLE COMPRA_ITENS ADD CONSTRAINT FK_COMPRA_ITENS_COMPRA  FOREIGN KEY (COMPRA_ID)  REFERENCES COMPRA(ID);
+ALTER TABLE COMPRA_ITENS ADD CONSTRAINT FK_COMPRA_ITENS_PRODUTO FOREIGN KEY (PRODUTO_ID) REFERENCES PRODUTO(ID);
+
+CREATE TABLE CT_RECEBER(
+  ID              INT NOT NULL PRIMARY KEY,
+  VENDA_ID        INT,
+  DATA_VENCIMENTO DATE,
+  DATA_PAGAMENTO  DATE,
+  VALOR_PARCELA   DECIMAL(10,2),
+  JUROS           DECIMAL(10,2),
+  MULTA           DECIMAL(10,2),
+  VALOR_PAGO      DECIMAL(10,2),
+  NUMERO_PARCELA  INT,
+  TOTAL_PARCELAS  INT,
+  FOREIGN KEY(VENDA_ID) REFERENCES VENDA(ID)
+);
+
+
+/* ==========================================================================
+   PARTE 1 - INSERT (colocar dados na tabela)
+   ==========================================================================
+
+   MODELO 1 - com a lista de colunas (o jeito recomendado):
+     INSERT INTO NOME_DA_TABELA (COLUNA1, COLUNA2, COLUNA3)
+     VALUES (VALOR1, VALOR2, VALOR3);
+     -> os valores entram na MESMA ORDEM das colunas que você listou.
+
+   MODELO 2 - sem a lista de colunas:
+     INSERT INTO NOME_DA_TABELA VALUES (VALOR1, VALOR2, VALOR3);
+     -> você é obrigado a passar TODAS as colunas, na ordem do CREATE TABLE.
+        Se alguém mudar a tabela, o insert quebra. Por isso o modelo 1 é melhor.
+
+   MODELO 3 - várias linhas num INSERT só:
+     INSERT INTO NOME_DA_TABELA (COLUNA1, COLUNA2) VALUES
+       (VALOR1, VALOR2),
+       (VALOR1, VALOR2);
+
+   REGRAS IMPORTANTES
+   - Texto e data vão entre aspas simples: 'MARINGÁ', '2026-01-01'.
+   - Número vai sem aspas: 1000.00 (com aspas também funciona no Postgres,
+     ele converte, mas sem aspas é o certo).
+   - Data: use o formato 'AAAA-MM-DD'. Funciona em qualquer banco.
+   - Coluna que você não informa fica NULL (vazia).
+   - ORDEM IMPORTA POR CAUSA DAS FKs: primeiro insere o "pai", depois o "filho".
+       CIDADE -> CLIENTE -> VENDA -> VENDA_ITENS
+       CIDADE -> FORNECEDOR -> COMPRA -> COMPRA_ITENS
+     Se você inserir um CLIENTE com CIDADE_ID = 99 e não existir a cidade 99,
+     o banco recusa (violação de chave estrangeira).
+*/
+
+-- 1.1 CIDADE (não depende de ninguém, então vem primeiro) - modelo 1
+INSERT INTO CIDADE (ID, NOME, UF) VALUES (1, 'MARINGÁ', 'PR');
+INSERT INTO CIDADE (ID, NOME, UF) VALUES (2, 'SARANDI', 'PR');
+INSERT INTO CIDADE (ID, NOME, UF) VALUES (3, 'MARIALVA', 'PR');
+INSERT INTO CIDADE (ID, NOME, UF) VALUES (4, 'SÃO PAULO', 'SP');
+INSERT INTO CIDADE (ID, NOME, UF) VALUES (5, 'RIO DE JANEIRO', 'RJ');
+
+-- modelo 2 (sem lista de colunas): precisa de ID, NOME e UF, nessa ordem.
+-- Cidade criada pra ter uma cidade SEM cliente e SEM fornecedor (útil no LEFT JOIN).
+INSERT INTO CIDADE VALUES (6, 'PAIÇANDU', 'PR');
+
+-- 1.2 CLIENTE (depende de CIDADE): o último valor é o CIDADE_ID
+INSERT INTO CLIENTE (ID, NOME, ENDERECO, FONE, DT_NASC, CIDADE_ID) VALUES (1, 'DOUGLAS',  'AV BRASIL',  '(44) 9 9999-8888', '1981-01-01', 5);
+INSERT INTO CLIENTE (ID, NOME, ENDERECO, FONE, DT_NASC, CIDADE_ID) VALUES (2, 'HELENA',   'AV PARANÁ',  '(44) 9 9999-8888', '2019-01-01', 1);
+INSERT INTO CLIENTE (ID, NOME, ENDERECO, FONE, DT_NASC, CIDADE_ID) VALUES (3, 'ARTHUR',   'AV MARINGÁ', '(44) 9 9999-8888', '2026-01-01', 2);
+INSERT INTO CLIENTE (ID, NOME, ENDERECO, FONE, DT_NASC, CIDADE_ID) VALUES (4, 'FULANO',   'AV BRASIL',  '(44) 9 9999-8888', '1981-01-01', 3);
+INSERT INTO CLIENTE (ID, NOME, ENDERECO, FONE, DT_NASC, CIDADE_ID) VALUES (5, 'BELTRANO', 'AV BRASIL',  '(44) 9 9999-8888', '1981-01-01', 4);
+
+-- 1.3 PRODUTO (não depende de ninguém) - modelo 3, várias linhas de uma vez
+INSERT INTO PRODUTO (ID, DESCRICAO, VALOR, QT) VALUES
+  (1, 'SOFA AZUL',  1000.00, 100),
+  (2, 'ARMARIO',     500.00, 100),
+  (3, 'CADEIRA',     200.00, 200),
+  (4, 'MESA',        400.00, 100),   -- a MESA nunca é vendida: aparece com NULL no LEFT JOIN
+  (5, 'SUPORTE TV',  300.00, 300);
+
+-- 1.4 VENDA (depende de CLIENTE) + VENDA_ITENS (depende de VENDA e PRODUTO)
+-- Primeiro a venda (o "cabeçalho"), depois os itens dela.
+INSERT INTO VENDA (ID, CLIENTE_ID, DATA_EMICAO, VALOR_TOTAL) VALUES (1, 1, '2026-01-01', 1200.00);
+INSERT INTO VENDA_ITENS (PRODUTO_ID, VENDA_ID, VL_UNIT, QT, VL_TOTAL) VALUES (1, 1, 500.00, 2, 1000.00);
+INSERT INTO VENDA_ITENS (PRODUTO_ID, VENDA_ID, VL_UNIT, QT, VL_TOTAL) VALUES (2, 1, 200.00, 1,  200.00);
+
+INSERT INTO VENDA (ID, CLIENTE_ID, DATA_EMICAO, VALOR_TOTAL) VALUES (2, 2, '2026-01-01', 500.00);
+INSERT INTO VENDA_ITENS (PRODUTO_ID, VENDA_ID, VL_UNIT, QT, VL_TOTAL) VALUES (2, 2, 500.00, 1, 500.00);
+
+INSERT INTO VENDA (ID, CLIENTE_ID, DATA_EMICAO, VALOR_TOTAL) VALUES (3, 3, '2026-01-01', 1200.00);
+INSERT INTO VENDA_ITENS (PRODUTO_ID, VENDA_ID, VL_UNIT, QT, VL_TOTAL) VALUES (1, 3, 1000.00, 1, 1000.00);
+INSERT INTO VENDA_ITENS (PRODUTO_ID, VENDA_ID, VL_UNIT, QT, VL_TOTAL) VALUES (3, 3,  200.00, 1,  200.00);
+
+INSERT INTO VENDA (ID, CLIENTE_ID, DATA_EMICAO, VALOR_TOTAL) VALUES (4, 4, '2026-01-01', 300.00);
+INSERT INTO VENDA_ITENS (PRODUTO_ID, VENDA_ID, VL_UNIT, QT, VL_TOTAL) VALUES (5, 4, 300.00, 1, 300.00);
+
+INSERT INTO VENDA (ID, CLIENTE_ID, DATA_EMICAO, VALOR_TOTAL) VALUES (5, 5, '2026-01-01', 1000.00);
+INSERT INTO VENDA_ITENS (PRODUTO_ID, VENDA_ID, VL_UNIT, QT, VL_TOTAL) VALUES (1, 5, 1000.00, 1, 1000.00);
+
+-- Venda SEM CLIENTE e SEM ITENS: o CLIENTE_ID fica NULL.
+-- Ela existe pra testar os exercícios "mesmo que a venda não tenha cliente/produto".
+INSERT INTO VENDA (ID, CLIENTE_ID, DATA_EMICAO, VALOR_TOTAL) VALUES (6, NULL, '2026-02-10', 150.00);
+
+-- 1.5 FORNECEDOR, COMPRA e COMPRA_ITENS
+-- O script da aula NÃO tem esses inserts, e sem eles os exercícios de compra voltam vazios.
+-- Mesma ordem: pai (FORNECEDOR) -> COMPRA -> COMPRA_ITENS.
+INSERT INTO FORNECEDOR (ID, CIDADE_ID, NOME, ENDERECO, FONE, DT_CAD) VALUES (1, 1, 'MÓVEIS MARINGÁ',     'AV COLOMBO',  '(44) 3333-1111', '2025-03-10');
+INSERT INTO FORNECEDOR (ID, CIDADE_ID, NOME, ENDERECO, FONE, DT_CAD) VALUES (2, 2, 'MADEIREIRA SARANDI', 'AV BRASIL',   '(44) 3333-2222', '2025-05-20');
+INSERT INTO FORNECEDOR (ID, CIDADE_ID, NOME, ENDERECO, FONE, DT_CAD) VALUES (3, 4, 'MÓVEIS SP',          'AV PAULISTA', '(11) 3333-3333', '2025-08-01');
+
+INSERT INTO COMPRA (ID, FORNECEDOR_ID, DATA_EMICAO, VALOR_TOTAL) VALUES (1, 1, '2026-01-10', 2000.00);
+INSERT INTO COMPRA (ID, FORNECEDOR_ID, DATA_EMICAO, VALOR_TOTAL) VALUES (2, 2, '2026-02-05', 1100.00);
+INSERT INTO COMPRA (ID, FORNECEDOR_ID, DATA_EMICAO, VALOR_TOTAL) VALUES (3, 3, '2026-03-01',  400.00);
+
+INSERT INTO COMPRA_ITENS (PRODUTO_ID, COMPRA_ID, VL_UNIT, QT, VL_TOTAL) VALUES (1, 1, 800.00, 2, 1600.00);
+INSERT INTO COMPRA_ITENS (PRODUTO_ID, COMPRA_ID, VL_UNIT, QT, VL_TOTAL) VALUES (3, 1, 100.00, 4,  400.00);
+INSERT INTO COMPRA_ITENS (PRODUTO_ID, COMPRA_ID, VL_UNIT, QT, VL_TOTAL) VALUES (2, 2, 300.00, 2,  600.00);
+INSERT INTO COMPRA_ITENS (PRODUTO_ID, COMPRA_ID, VL_UNIT, QT, VL_TOTAL) VALUES (5, 2, 250.00, 2,  500.00);
+INSERT INTO COMPRA_ITENS (PRODUTO_ID, COMPRA_ID, VL_UNIT, QT, VL_TOTAL) VALUES (4, 3, 400.00, 1,  400.00);
+
+-- 1.6 CT_RECEBER (depende de VENDA): uma parcela pra cada venda
+INSERT INTO CT_RECEBER (ID, VENDA_ID, DATA_VENCIMENTO, DATA_PAGAMENTO, VALOR_PARCELA, JUROS, MULTA, VALOR_PAGO, NUMERO_PARCELA, TOTAL_PARCELAS) VALUES (1, 1, '2026-01-01', '2026-01-01', 1200.00, 0, 0, 1200.00, 1, 1);
+INSERT INTO CT_RECEBER (ID, VENDA_ID, DATA_VENCIMENTO, DATA_PAGAMENTO, VALOR_PARCELA, JUROS, MULTA, VALOR_PAGO, NUMERO_PARCELA, TOTAL_PARCELAS) VALUES (2, 2, '2026-01-01', '2026-01-01',  500.00, 0, 0,  500.00, 1, 1);
+INSERT INTO CT_RECEBER (ID, VENDA_ID, DATA_VENCIMENTO, DATA_PAGAMENTO, VALOR_PARCELA, JUROS, MULTA, VALOR_PAGO, NUMERO_PARCELA, TOTAL_PARCELAS) VALUES (3, 3, '2026-01-01', '2026-01-01', 1200.00, 0, 0, 1200.00, 1, 1);
+INSERT INTO CT_RECEBER (ID, VENDA_ID, DATA_VENCIMENTO, DATA_PAGAMENTO, VALOR_PARCELA, JUROS, MULTA, VALOR_PAGO, NUMERO_PARCELA, TOTAL_PARCELAS) VALUES (4, 4, '2026-01-01', '2026-01-01',  300.00, 0, 0,  300.00, 1, 1);
+INSERT INTO CT_RECEBER (ID, VENDA_ID, DATA_VENCIMENTO, DATA_PAGAMENTO, VALOR_PARCELA, JUROS, MULTA, VALOR_PAGO, NUMERO_PARCELA, TOTAL_PARCELAS) VALUES (5, 5, '2026-01-01', '2026-01-01', 1000.00, 0, 0, 1000.00, 1, 1);
+
+/* ERROS COMUNS DE INSERT (estão comentados pra não quebrar o arquivo):
+
+   -- ERRO: chave primária repetida (já existe a cidade 1)
+   INSERT INTO CIDADE (ID, NOME, UF) VALUES (1, 'CIANORTE', 'PR');
+
+   -- ERRO: FK apontando pra cidade que não existe
+   INSERT INTO CLIENTE (ID, NOME, CIDADE_ID) VALUES (10, 'JOÃO', 99);
+
+   -- ERRO: item de uma venda que ainda não foi inserida (inserir o filho antes do pai)
+   INSERT INTO VENDA_ITENS (PRODUTO_ID, VENDA_ID, VL_UNIT, QT, VL_TOTAL) VALUES (1, 50, 10, 1, 10);
+
+   -- ERRO: número de valores diferente do número de colunas
+   INSERT INTO CIDADE (ID, NOME, UF) VALUES (7, 'CIANORTE');
+*/
+
+
+/* ==========================================================================
+   PARTE 2 - SELECT BÁSICO (uma tabela só)
+   ==========================================================================
+
+   MODELO COMPLETO (a ordem das cláusulas é sempre essa):
+     SELECT COLUNA1, COLUNA2          -- quais colunas mostrar
+     FROM NOME_DA_TABELA1             -- de qual tabela
+     WHERE CONDICAO                   -- quais linhas (filtro)
+     GROUP BY COLUNA1                 -- agrupar (Parte 5)
+     HAVING CONDICAO_DO_GRUPO         -- filtrar grupos (Parte 5)
+     ORDER BY COLUNA1;                -- ordenar
+*/
+
+-- 2.1 todas as colunas, todas as linhas
+SELECT * FROM CIDADE;
+
+-- 2.2 só algumas colunas
+SELECT NOME, UF FROM CIDADE;
+
+-- 2.3 apelido (alias) pra coluna e pra tabela
+--     AS NOME_CIDADE muda o nome da coluna no resultado
+--     C é o apelido da tabela: dá pra escrever C.NOME em vez de CIDADE.NOME
+SELECT C.NOME AS NOME_CIDADE, C.UF AS ESTADO
+FROM CIDADE C;
+
+-- 2.4 WHERE: filtros
+SELECT * FROM CIDADE  WHERE UF = 'PR';                         -- igual
+SELECT * FROM CIDADE  WHERE UF <> 'PR';                        -- diferente
+SELECT * FROM PRODUTO WHERE VALOR > 300;                       -- maior (também <, >=, <=)
+SELECT * FROM PRODUTO WHERE VALOR BETWEEN 200 AND 500;         -- entre (inclui 200 e 500)
+SELECT * FROM CIDADE  WHERE UF IN ('SP', 'RJ');                -- está na lista
+SELECT * FROM CLIENTE WHERE NOME LIKE 'H%';                    -- começa com H (% = qualquer coisa)
+SELECT * FROM CLIENTE WHERE NOME LIKE '%ANO';                  -- termina com ANO
+SELECT * FROM VENDA   WHERE CLIENTE_ID IS NULL;                -- vazio (NUNCA use = NULL)
+SELECT * FROM VENDA   WHERE CLIENTE_ID IS NOT NULL;            -- preenchido
+SELECT * FROM VENDA   WHERE DATA_EMICAO <= '2026-01-31';       -- data até
+SELECT * FROM PRODUTO WHERE VALOR > 300 AND QT >= 100;         -- as duas condições
+SELECT * FROM CIDADE  WHERE UF = 'SP' OR UF = 'RJ';            -- qualquer uma
+
+-- 2.5 ORDER BY: ordenar (ASC = crescente, padrão / DESC = decrescente)
+SELECT * FROM PRODUTO ORDER BY VALOR DESC;
+SELECT * FROM CLIENTE ORDER BY CIDADE_ID, NOME;                -- primeiro por cidade, depois por nome
+
+-- 2.6 DISTINCT: tira as linhas repetidas do resultado
+SELECT DISTINCT UF FROM CIDADE;                                -- PR aparece uma vez só
+
+-- 2.7 contas direto no SELECT
+SELECT DESCRICAO, VALOR, VALOR * 1.10 AS VALOR_COM_10_PORCENTO FROM PRODUTO;
+
+
+/* ==========================================================================
+   PARTE 3 - LIGAÇÃO DE TABELAS NO WHERE (o jeito "antigo" de juntar tabelas)
+   ==========================================================================
+
+   MODELO:
+     SELECT NOME_DA_TABELA1.COLUNA, NOME_DA_TABELA2.COLUNA
+     FROM NOME_DA_TABELA1, NOME_DA_TABELA2
+     WHERE NOME_DA_TABELA1.COLUNA_FK = NOME_DA_TABELA2.ID     -- LIGAÇÃO
+       AND OUTRA_CONDICAO;                                    -- FILTRO
+
+   COMO FUNCIONA
+   - Duas tabelas no FROM separadas por vírgula: o banco combina TODAS as linhas
+     de uma com TODAS da outra (produto cartesiano).
+     5 clientes x 6 cidades = 30 linhas, quase todas sem sentido.
+   - A condição de ligação no WHERE joga fora as combinações erradas.
+   - REGRA: N tabelas no FROM -> pelo menos N-1 ligações no WHERE.
+     2 tabelas = 1 ligação / 3 tabelas = 2 ligações / 4 tabelas = 3 ligações.
+*/
+
+-- 3.1 SEM a ligação: produto cartesiano (30 linhas, ERRADO de propósito)
+SELECT CLIENTE.NOME, CIDADE.NOME
+FROM CLIENTE, CIDADE;
+
+-- 3.2 COM a ligação: cada cliente com a cidade dele (5 linhas, CERTO)
+SELECT CLIENTE.NOME, CIDADE.NOME
+FROM CLIENTE, CIDADE
+WHERE CLIENTE.CIDADE_ID = CIDADE.ID;
+
+-- 3.3 três tabelas = duas ligações
+SELECT VENDA.ID, CLIENTE.NOME, CIDADE.NOME
+FROM VENDA, CLIENTE, CIDADE
+WHERE VENDA.CLIENTE_ID  = CLIENTE.ID      -- ligação 1: venda -> cliente
+  AND CLIENTE.CIDADE_ID = CIDADE.ID;      -- ligação 2: cliente -> cidade
+
+-- ---------- LISTA "LigacaoTabelasNoWhere" RESOLVIDA ----------
+
+-- 01) código do fornecedor, nome e nome da cidade, onde a cidade tem estado 'PR'
+--     Atenção: o dado está gravado 'PR' (maiúsculo). Com 'pr' o Postgres não acha nada.
+SELECT F.ID, F.NOME, C.NOME AS CIDADE
+FROM FORNECEDOR F, CIDADE C
+WHERE F.CIDADE_ID = C.ID          -- ligação
+  AND C.UF = 'PR';                -- filtro
+
+-- 02) código da compra, data, valor total, código e nome do produto,
+--     valor unitário, quantidade e valor total do produto
+--     3 tabelas: COMPRA_ITENS fica no meio, ligando COMPRA e PRODUTO.
+SELECT C.ID, C.DATA_EMICAO, C.VALOR_TOTAL,
+       P.ID, P.DESCRICAO,
+       CI.VL_UNIT, CI.QT, CI.VL_TOTAL
+FROM COMPRA C, COMPRA_ITENS CI, PRODUTO P
+WHERE CI.COMPRA_ID  = C.ID
+  AND CI.PRODUTO_ID = P.ID;
+
+-- 03) todos os clientes com venda até '2011-03-01'
+--     Volta vazio: todas as vendas são de 2026. Troque a data pra '2026-12-31' pra testar.
+--     DISTINCT porque um cliente com 2 vendas apareceria 2 vezes.
+SELECT DISTINCT CL.ID, CL.NOME
+FROM CLIENTE CL, VENDA V
+WHERE V.CLIENTE_ID = CL.ID
+  AND V.DATA_EMICAO <= '2011-03-01';
+
+-- 04) todos os produtos que já foram vendidos
+--     "Vendido" = aparece em VENDA_ITENS. Sem DISTINCT o SOFA AZUL vem 3 vezes.
+SELECT DISTINCT P.ID, P.DESCRICAO
+FROM PRODUTO P, VENDA_ITENS VI
+WHERE VI.PRODUTO_ID = P.ID;
+
+-- 05) todas as cidades que tenham vendas até '2011-03-01'
+--     A venda não tem cidade direto. Caminho: CIDADE <- CLIENTE <- VENDA.
+SELECT DISTINCT CI.NOME
+FROM CIDADE CI, CLIENTE CL, VENDA V
+WHERE CL.CIDADE_ID = CI.ID
+  AND V.CLIENTE_ID = CL.ID
+  AND V.DATA_EMICAO <= '2011-03-01';
+
+
+/* ==========================================================================
+   PARTE 4 - JOINS
+   ==========================================================================
+
+   MODELO:
+     SELECT T1.COLUNA, T2.COLUNA
+     FROM NOME_DA_TABELA1 T1
+     [INNER | LEFT | RIGHT | FULL] JOIN NOME_DA_TABELA2 T2 ON T2.COLUNA_FK = T1.ID
+     WHERE FILTRO;
+
+   O JOIN faz a mesma ligação do WHERE, só que ela fica no ON, separada dos filtros.
+
+   TIPOS
+   - INNER JOIN : só as linhas que têm par nos DOIS lados. (= ligação no WHERE)
+   - LEFT JOIN  : TODAS as linhas da tabela da ESQUERDA (a do FROM).
+                  Quem não tem par vem com NULL nas colunas da direita.
+   - RIGHT JOIN : TODAS as linhas da tabela da DIREITA. (o espelho do LEFT)
+   - FULL JOIN  : todas dos dois lados (existe no Postgres, quase não se usa).
+
+   COMO ESCOLHER
+   - Enunciado diz "MESMO QUE NÃO TENHA" -> LEFT JOIN, e a tabela que precisa
+     aparecer sempre vai na ESQUERDA (no FROM).
+   - Senão -> INNER JOIN.
+*/
+
+-- 4.1 INNER JOIN: produtos que têm item de venda (a MESA não aparece)
+SELECT P.DESCRICAO, VI.VENDA_ID, VI.QT
+FROM PRODUTO P
+INNER JOIN VENDA_ITENS VI ON VI.PRODUTO_ID = P.ID;
+
+-- 4.2 LEFT JOIN: TODOS os produtos; a MESA vem com VENDA_ID e QT = NULL
+SELECT P.DESCRICAO, VI.VENDA_ID, VI.QT
+FROM PRODUTO P
+LEFT JOIN VENDA_ITENS VI ON VI.PRODUTO_ID = P.ID;
+
+-- 4.3 LEFT JOIN + IS NULL: só quem NÃO tem par -> "produtos que nunca venderam"
+SELECT P.DESCRICAO
+FROM PRODUTO P
+LEFT JOIN VENDA_ITENS VI ON VI.PRODUTO_ID = P.ID
+WHERE VI.PRODUTO_ID IS NULL;
+
+-- 4.4 RIGHT JOIN: TODAS as vendas (tabela da direita), até a venda 6 sem cliente
+SELECT CL.NOME, V.ID, V.VALOR_TOTAL
+FROM CLIENTE CL
+RIGHT JOIN VENDA V ON V.CLIENTE_ID = CL.ID;
+
+-- 4.5 o mesmo resultado do 4.4, escrito com LEFT (é só inverter a ordem das tabelas)
+SELECT CL.NOME, V.ID, V.VALOR_TOTAL
+FROM VENDA V
+LEFT JOIN CLIENTE CL ON CL.ID = V.CLIENTE_ID;
+
+-- 4.6 FULL JOIN: todas as cidades e todos os fornecedores, com ou sem par
+SELECT C.NOME AS CIDADE, F.NOME AS FORNECEDOR
+FROM CIDADE C
+FULL JOIN FORNECEDOR F ON F.CIDADE_ID = C.ID;
+
+-- 4.7 vários JOINs encadeados: cada JOIN liga uma tabela NOVA com uma que já está na consulta
+SELECT CI.NOME AS CIDADE, CL.NOME AS CLIENTE, V.ID AS VENDA, P.DESCRICAO, VI.QT
+FROM CIDADE CI
+INNER JOIN CLIENTE CL     ON CL.CIDADE_ID = CI.ID     -- cidade  -> cliente
+INNER JOIN VENDA V        ON V.CLIENTE_ID  = CL.ID    -- cliente -> venda
+INNER JOIN VENDA_ITENS VI ON VI.VENDA_ID   = V.ID     -- venda   -> itens
+INNER JOIN PRODUTO P      ON P.ID          = VI.PRODUTO_ID;  -- itens -> produto
+
+-- 4.8 PEGADINHA: LEFT JOIN + filtro no WHERE numa coluna da direita
+--     A MESA tem QT = NULL, o filtro QT >= 1 elimina ela, e o LEFT vira INNER sem você perceber.
+SELECT P.DESCRICAO, VI.QT
+FROM PRODUTO P
+LEFT JOIN VENDA_ITENS VI ON VI.PRODUTO_ID = P.ID
+WHERE VI.QT >= 1;
+--     Se o filtro é da tabela da direita e você quer manter as linhas sem par,
+--     coloque ele no ON:   LEFT JOIN VENDA_ITENS VI ON VI.PRODUTO_ID = P.ID AND VI.QT >= 1
+
+-- ---------- LISTA "ListaDeExercicioComJoins" RESOLVIDA ----------
+
+-- 1) nome do fornecedor, nome da cidade do fornecedor, código da compra, data de emissão e valor total
+SELECT F.NOME        AS FORNECEDOR,
+       CI.NOME       AS CIDADE,
+       C.ID          AS COD_COMPRA,
+       C.DATA_EMICAO,
+       C.VALOR_TOTAL
+FROM COMPRA C
+INNER JOIN FORNECEDOR F ON F.ID  = C.FORNECEDOR_ID
+INNER JOIN CIDADE CI    ON CI.ID = F.CIDADE_ID;
+
+-- 2) todos os dados da venda e dos produtos vendidos, MESMO QUE não tenha produto vendido
+--    LEFT a partir de VENDA: a venda 6 (sem itens) aparece com as colunas de produto NULL.
+SELECT V.*, VI.*, P.*
+FROM VENDA V
+LEFT JOIN VENDA_ITENS VI ON VI.VENDA_ID = V.ID
+LEFT JOIN PRODUTO P      ON P.ID        = VI.PRODUTO_ID;
+
+-- 3) total de vendas MESMO QUE a venda não tenha cliente
+--    Lista das vendas (a venda 6 aparece com CLIENTE = NULL):
+SELECT V.ID, V.DATA_EMICAO, V.VALOR_TOTAL, CL.NOME AS CLIENTE
+FROM VENDA V
+LEFT JOIN CLIENTE CL ON CL.ID = V.CLIENTE_ID;
+--    Valor somado de todas elas:
+SELECT SUM(V.VALOR_TOTAL) AS TOTAL_VENDAS
+FROM VENDA V
+LEFT JOIN CLIENTE CL ON CL.ID = V.CLIENTE_ID;
+
+-- 4) nome do cliente e nome dos produtos que ele já comprou,
+--    MESMO QUE tenha uma venda sem produto (o produto aparece vazio)
+--    INNER entre cliente e venda (cliente precisa ter venda),
+--    LEFT daí pra frente (a venda pode não ter item).
+SELECT CL.NOME AS CLIENTE, P.DESCRICAO AS PRODUTO
+FROM CLIENTE CL
+INNER JOIN VENDA V       ON V.CLIENTE_ID = CL.ID
+LEFT JOIN VENDA_ITENS VI ON VI.VENDA_ID  = V.ID
+LEFT JOIN PRODUTO P      ON P.ID         = VI.PRODUTO_ID
+ORDER BY CL.NOME;
+
+-- 5) todos os produtos que já foram vendidos
+SELECT DISTINCT P.ID, P.DESCRICAO, P.VALOR
+FROM PRODUTO P
+INNER JOIN VENDA_ITENS VI ON VI.PRODUTO_ID = P.ID;
+
+-- 6) todos os produtos já comprados de fornecedores do estado 'PR'
+--    O caminho inteiro: produto -> item da compra -> compra -> fornecedor -> cidade (onde está a UF)
+SELECT DISTINCT P.ID, P.DESCRICAO
+FROM PRODUTO P
+INNER JOIN COMPRA_ITENS CI ON CI.PRODUTO_ID = P.ID
+INNER JOIN COMPRA C        ON C.ID          = CI.COMPRA_ID
+INNER JOIN FORNECEDOR F    ON F.ID          = C.FORNECEDOR_ID
+INNER JOIN CIDADE CID      ON CID.ID        = F.CIDADE_ID
+WHERE CID.UF = 'PR';
+
+
+/* ==========================================================================
+   PARTE 5 - AGREGAÇÃO E GROUP BY
+   ==========================================================================
+
+   FUNÇÕES DE AGREGAÇÃO (transformam várias linhas em um número):
+     COUNT(*)       -> conta linhas
+     COUNT(COLUNA)  -> conta só os valores NÃO nulos da coluna
+     SUM(COLUNA)    -> soma
+     AVG(COLUNA)    -> média
+     MIN(COLUNA)    -> menor valor
+     MAX(COLUNA)    -> maior valor
+
+   MODELO:
+     SELECT COLUNA_DO_GRUPO, FUNCAO(COLUNA)
+     FROM NOME_DA_TABELA1
+     WHERE FILTRO_DE_LINHA              -- roda ANTES de agrupar
+     GROUP BY COLUNA_DO_GRUPO
+     HAVING FUNCAO(COLUNA) > VALOR;     -- roda DEPOIS de agrupar (filtra grupos)
+
+   REGRA DE OURO: toda coluna do SELECT que NÃO está dentro de uma função
+   precisa estar no GROUP BY. Senão o Postgres dá erro.
+
+   ORDEM EM QUE O BANCO EXECUTA:
+     FROM/JOIN -> WHERE -> GROUP BY -> HAVING -> SELECT -> ORDER BY
+   Por isso o WHERE não aceita SUM(...): quando ele roda, a soma ainda não existe.
+*/
+
+-- 5.1 sem GROUP BY: a tabela inteira vira UMA linha
+SELECT COUNT(*) AS TOTAL_CIDADES FROM CIDADE;       -- contar registros
+SELECT MAX(ID)  AS MAIOR_ID      FROM CIDADE;       -- maior
+SELECT MIN(ID)  AS MENOR_ID      FROM CIDADE;       -- menor
+SELECT SUM(VALOR_TOTAL) AS SOMA  FROM VENDA;        -- soma
+SELECT AVG(VALOR_TOTAL) AS MEDIA FROM VENDA;        -- média
+
+-- 5.2 COUNT(*) x COUNT(COLUNA)
+SELECT COUNT(*)          AS LINHAS,             -- 6 (conta a venda 6 também)
+       COUNT(CLIENTE_ID) AS VENDAS_COM_CLIENTE  -- 5 (ignora o NULL da venda 6)
+FROM VENDA;
+
+-- 5.3 GROUP BY: separa em grupos e aplica a função em cada grupo
+--     "quanto foi vendido em cada venda"
+SELECT VENDA_ID, SUM(VL_TOTAL) AS TOTAL, COUNT(*) AS QTD_ITENS
+FROM VENDA_ITENS
+GROUP BY VENDA_ID
+ORDER BY VENDA_ID;
+
+-- 5.4 GROUP BY com JOIN + LEFT JOIN (exemplo do professor, Agrupamento.txt)
+--     COUNT(VENDA.ID) dá 0 pra quem não tem venda. COUNT(*) daria 1 (a linha com NULL também conta).
+--     GROUP BY 1, 2 = agrupe pela 1ª e pela 2ª coluna do SELECT (atalho).
+SELECT CLIENTE.ID, CLIENTE.NOME, COUNT(VENDA.ID) AS QTD_VENDAS
+FROM CLIENTE
+LEFT JOIN VENDA ON VENDA.CLIENTE_ID = CLIENTE.ID
+GROUP BY 1, 2
+ORDER BY CLIENTE.NOME;
+
+-- 5.5 HAVING: filtra os GRUPOS depois de somar (só vendas acima de 500)
+SELECT VENDA_ID, SUM(VL_TOTAL) AS TOTAL
+FROM VENDA_ITENS
+GROUP BY VENDA_ID
+HAVING SUM(VL_TOTAL) > 500;
+
+-- 5.6 WHERE + GROUP BY + HAVING juntos
+SELECT CI.UF, COUNT(CL.ID) AS QTD_CLIENTES
+FROM CIDADE CI
+INNER JOIN CLIENTE CL ON CL.CIDADE_ID = CI.ID
+WHERE CL.DT_NASC < '2000-01-01'        -- linhas: só clientes nascidos antes de 2000
+GROUP BY CI.UF
+HAVING COUNT(CL.ID) >= 1;              -- grupos: só estados com pelo menos 1
+
+/* 5.7 ERRO CLÁSSICO (comentado): CLIENTE.NOME não está no GROUP BY nem numa função.
+       Se a cidade tivesse 2 clientes, o banco não saberia qual nome mostrar.
+
+   SELECT CIDADE.NOME, CLIENTE.NOME, SUM(VENDA.VALOR_TOTAL)
+   FROM CIDADE
+   INNER JOIN CLIENTE ON CLIENTE.CIDADE_ID = CIDADE.ID
+   INNER JOIN VENDA   ON VENDA.CLIENTE_ID  = CLIENTE.ID
+   GROUP BY CIDADE.NOME;
+*/
+
+-- ---------- LISTA "ListaDeExercicioComGroupBy" RESOLVIDA ----------
+
+-- 1) total em valores vendidos agrupado por nome de cidade
+SELECT CI.NOME AS CIDADE, SUM(V.VALOR_TOTAL) AS TOTAL_VENDIDO
+FROM CIDADE CI
+INNER JOIN CLIENTE CL ON CL.CIDADE_ID = CI.ID
+INNER JOIN VENDA V    ON V.CLIENTE_ID  = CL.ID
+GROUP BY CI.NOME;
+
+-- 2) quantidade de produtos vendidos para um determinado cliente, agrupado pelo nome do cliente
+--    A quantidade está em VENDA_ITENS.QT. Pra um cliente só, tire o comentário do WHERE.
+SELECT CL.NOME AS CLIENTE, SUM(VI.QT) AS QT_PRODUTOS
+FROM CLIENTE CL
+INNER JOIN VENDA V        ON V.CLIENTE_ID = CL.ID
+INNER JOIN VENDA_ITENS VI ON VI.VENDA_ID  = V.ID
+-- WHERE CL.ID = 1
+GROUP BY CL.NOME;
+
+-- 3) nome da cidade e quantidade de produtos vendidos, MESMO QUE não tenha venda pra ela
+--    Tudo LEFT a partir de CIDADE. PAIÇANDU não tem venda: SUM dá NULL,
+--    e COALESCE(valor, 0) troca o NULL por 0.
+SELECT CI.NOME AS CIDADE, COALESCE(SUM(VI.QT), 0) AS QT_PRODUTOS
+FROM CIDADE CI
+LEFT JOIN CLIENTE CL     ON CL.CIDADE_ID = CI.ID
+LEFT JOIN VENDA V        ON V.CLIENTE_ID  = CL.ID
+LEFT JOIN VENDA_ITENS VI ON VI.VENDA_ID   = V.ID
+GROUP BY CI.NOME;
+
+-- 4) total de compras agrupado por fornecedor
+--    Total em valor (SUM). Se for quantidade de compras, troque por COUNT(C.ID).
+SELECT F.NOME AS FORNECEDOR, SUM(C.VALOR_TOTAL) AS TOTAL_COMPRAS
+FROM FORNECEDOR F
+INNER JOIN COMPRA C ON C.FORNECEDOR_ID = F.ID
+GROUP BY F.NOME;
+
+-- 5) total de produtos vendidos agrupado por número da venda
+SELECT VI.VENDA_ID, SUM(VI.QT) AS QT_PRODUTOS
+FROM VENDA_ITENS VI
+GROUP BY VI.VENDA_ID
+ORDER BY VI.VENDA_ID;
+
+-- 6) total de produtos agrupado por data de venda, entre 2026/01/01 e 2026/12/01
+--    O filtro de data é de LINHA, então vai no WHERE (antes do GROUP BY).
+SELECT V.DATA_EMICAO, SUM(VI.QT) AS QT_PRODUTOS
+FROM VENDA V
+INNER JOIN VENDA_ITENS VI ON VI.VENDA_ID = V.ID
+WHERE V.DATA_EMICAO BETWEEN '2026-01-01' AND '2026-12-01'
+GROUP BY V.DATA_EMICAO;
+
+
+/* ==========================================================================
+   PARTE 6 - UNION (empilhar resultados)
+   ==========================================================================
+
+   JOIN junta LADO A LADO (o resultado ganha colunas).
+   UNION EMPILHA um SELECT embaixo do outro (o resultado ganha linhas).
+
+   MODELO:
+     SELECT COLUNA1, COLUNA2 FROM NOME_DA_TABELA1
+     UNION
+     SELECT COLUNA1, COLUNA2 FROM NOME_DA_TABELA2
+     ORDER BY 1;
+
+   REGRAS
+   - Os SELECTs precisam ter o MESMO NÚMERO de colunas, com tipos compatíveis
+     na mesma posição.
+   - Os nomes das colunas do resultado vêm do PRIMEIRO SELECT.
+   - ORDER BY vai uma vez só, no FINAL, e ordena tudo.
+   - UNION remove linhas repetidas. UNION ALL mantém todas.
+   - Truque da coluna constante: 'VENDAS' AS TIPO diz de qual SELECT veio a linha
+     (e impede que duas linhas iguais de origens diferentes virem uma só).
+*/
+
+-- 6.1 UNION: cidades que têm cliente + cidades que têm fornecedor, sem repetir
+SELECT CIDADE.NOME FROM CIDADE INNER JOIN CLIENTE    ON CLIENTE.CIDADE_ID    = CIDADE.ID
+UNION
+SELECT CIDADE.NOME FROM CIDADE INNER JOIN FORNECEDOR ON FORNECEDOR.CIDADE_ID = CIDADE.ID;
+
+-- 6.2 UNION ALL: a mesma coisa, mas mantém as repetidas (5 + 3 = 8 linhas)
+SELECT CIDADE.NOME FROM CIDADE INNER JOIN CLIENTE    ON CLIENTE.CIDADE_ID    = CIDADE.ID
+UNION ALL
+SELECT CIDADE.NOME FROM CIDADE INNER JOIN FORNECEDOR ON FORNECEDOR.CIDADE_ID = CIDADE.ID;
+
+-- 6.3 completando coluna que falta com NULL (pra os dois lados terem 2 colunas)
+SELECT NOME, UF   FROM CIDADE
+UNION
+SELECT NOME, NULL FROM CLIENTE;
+
+-- 6.4 exemplo do professor (ExemploUnion_VIEW.txt): quantidade vendida e comprada por cidade
+SELECT 'VENDAS' AS TIPO, CIDADE.NOME, SUM(VENDA_ITENS.QT) AS TOTAL_PRODUTO
+FROM CIDADE
+INNER JOIN CLIENTE     ON CLIENTE.CIDADE_ID = CIDADE.ID
+INNER JOIN VENDA       ON VENDA.CLIENTE_ID  = CLIENTE.ID
+INNER JOIN VENDA_ITENS ON VENDA.ID          = VENDA_ITENS.VENDA_ID
+GROUP BY CIDADE.NOME
+UNION
+SELECT 'COMPRAS' AS TIPO, CIDADE.NOME, SUM(COMPRA_ITENS.QT) AS TOTAL_PRODUTO
+FROM CIDADE
+INNER JOIN FORNECEDOR   ON FORNECEDOR.CIDADE_ID = CIDADE.ID
+INNER JOIN COMPRA       ON COMPRA.FORNECEDOR_ID = FORNECEDOR.ID
+INNER JOIN COMPRA_ITENS ON COMPRA.ID            = COMPRA_ITENS.COMPRA_ID
+GROUP BY CIDADE.NOME;
+
+-- ---------- LISTA "ListaUnion" RESOLVIDA ----------
+
+-- 1) tipo | produto | qt   (quanto de cada produto foi vendido e comprado)
+SELECT 'VENDAS' AS TIPO, P.DESCRICAO AS PRODUTO, SUM(VI.QT) AS QT
+FROM PRODUTO P
+INNER JOIN VENDA_ITENS VI ON VI.PRODUTO_ID = P.ID
+GROUP BY P.DESCRICAO
+UNION
+SELECT 'COMPRAS', P.DESCRICAO, SUM(CI.QT)
+FROM PRODUTO P
+INNER JOIN COMPRA_ITENS CI ON CI.PRODUTO_ID = P.ID
+GROUP BY P.DESCRICAO
+ORDER BY 2, 1;          -- ordena por produto e depois por tipo, igual ao exemplo
+
+-- 2) cidade | tipo | qt   (quantos fornecedores e quantos clientes cada cidade tem)
+SELECT C.NOME AS CIDADE, 'FORNECEDORES' AS TIPO, COUNT(F.ID) AS QT
+FROM CIDADE C
+INNER JOIN FORNECEDOR F ON F.CIDADE_ID = C.ID
+GROUP BY C.NOME
+UNION
+SELECT C.NOME, 'CLIENTES', COUNT(CL.ID)
+FROM CIDADE C
+INNER JOIN CLIENTE CL ON CL.CIDADE_ID = C.ID
+GROUP BY C.NOME
+ORDER BY 1, 2;
+
+-- 3) cidade | tipo | total_quantidade   (produtos vendidos e comprados por cidade)
+--    É o exemplo 6.4 com a ordem das colunas trocada: cidade primeiro.
+SELECT CI.NOME AS CIDADE, 'VENDAS' AS TIPO, SUM(VI.QT) AS TOTAL_QUANTIDADE
+FROM CIDADE CI
+INNER JOIN CLIENTE CL     ON CL.CIDADE_ID = CI.ID
+INNER JOIN VENDA V        ON V.CLIENTE_ID  = CL.ID
+INNER JOIN VENDA_ITENS VI ON VI.VENDA_ID   = V.ID
+GROUP BY CI.NOME
+UNION
+SELECT CI.NOME, 'COMPRAS', SUM(CO.QT)
+FROM CIDADE CI
+INNER JOIN FORNECEDOR F    ON F.CIDADE_ID     = CI.ID
+INNER JOIN COMPRA C        ON C.FORNECEDOR_ID = F.ID
+INNER JOIN COMPRA_ITENS CO ON CO.COMPRA_ID    = C.ID
+GROUP BY CI.NOME
+ORDER BY 1, 2;
+
+
+/* ==========================================================================
+   PARTE 7 - VIEW (uma consulta salva com nome)
+   ==========================================================================
+
+   MODELO:
+     CREATE VIEW NOME_DA_VIEW AS ( SELECT ... );      -- cria
+     SELECT * FROM NOME_DA_VIEW;                      -- usa como se fosse tabela
+     CREATE OR REPLACE VIEW NOME_DA_VIEW AS ( ... );  -- altera (Postgres)
+     DROP VIEW NOME_DA_VIEW;                          -- apaga
+
+   - A view NÃO guarda dados, guarda só a consulta. Cada SELECT nela roda a
+     consulta de novo, então ela está sempre atualizada.
+   - DROP VIEW apaga só a consulta salva. Os dados das tabelas continuam lá.
+   - Serve pra esconder JOIN complicado atrás de um nome simples e pra mostrar
+     só algumas colunas de uma tabela.
+*/
+
+-- 7.1 exemplo do professor: só ID e NOME do cliente (esconde endereço e telefone)
+CREATE VIEW VW_CLIENTE AS ( SELECT ID, NOME FROM CLIENTE );
+
+SELECT * FROM VW_CLIENTE;
+
+-- 7.2 view com JOIN + GROUP BY, e filtro em cima dela
+CREATE VIEW VW_VENDAS_POR_CIDADE AS (
+  SELECT CIDADE.NOME AS CIDADE, SUM(VENDA.VALOR_TOTAL) AS TOTAL
+  FROM CIDADE
+  INNER JOIN CLIENTE ON CLIENTE.CIDADE_ID = CIDADE.ID
+  INNER JOIN VENDA   ON VENDA.CLIENTE_ID  = CLIENTE.ID
+  GROUP BY CIDADE.NOME
+);
+
+SELECT * FROM VW_VENDAS_POR_CIDADE WHERE TOTAL > 500 ORDER BY TOTAL DESC;
+
+-- 7.3 a view do UNION da lista (pra não ter que digitar tudo de novo)
+CREATE VIEW VW_MOVIMENTO_PRODUTOS AS (
+  SELECT 'VENDAS' AS TIPO, P.DESCRICAO AS PRODUTO, SUM(VI.QT) AS QT
+  FROM PRODUTO P
+  INNER JOIN VENDA_ITENS VI ON VI.PRODUTO_ID = P.ID
+  GROUP BY P.DESCRICAO
+  UNION
+  SELECT 'COMPRAS', P.DESCRICAO, SUM(CI.QT)
+  FROM PRODUTO P
+  INNER JOIN COMPRA_ITENS CI ON CI.PRODUTO_ID = P.ID
+  GROUP BY P.DESCRICAO
+);
+
+SELECT * FROM VW_MOVIMENTO_PRODUTOS WHERE PRODUTO = 'SOFA AZUL';
+
+-- 7.4 alterar e apagar
+CREATE OR REPLACE VIEW VW_CLIENTE AS ( SELECT ID, NOME, FONE FROM CLIENTE );
+DROP VIEW VW_MOVIMENTO_PRODUTOS;
+
+/* ==========================================================================
+   RESUMO DE BOLSO
+   - FROM A, B WHERE A.FK = B.ID  ==  FROM A INNER JOIN B ON A.FK = B.ID
+   - "mesmo que não tenha"         -> LEFT JOIN, tabela que sempre aparece à esquerda
+   - "quantos / total / média"     -> função de agregação
+   - "por cidade / por cliente"    -> GROUP BY nessa coluna
+   - filtro com SUM/COUNT          -> HAVING (não WHERE)
+   - "empilhar vendas e compras"   -> UNION com coluna 'TIPO'
+   - consulta que vai ser reusada  -> VIEW
+   ========================================================================== */
