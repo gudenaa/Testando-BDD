@@ -764,6 +764,11 @@ ORDER BY 1, 2;
    Por que só aparecem algumas cidades: é INNER JOIN, então só entra cidade que
    tem venda (no SELECT de vendas) ou compra (no SELECT de compras). PAIÇANDU
    não tem nenhuma das duas e fica de fora.
+
+   ATENÇÃO: o script.sql do professor NÃO tem fornecedor nem compra. Se rodar
+   só ele, essa consulta mostra apenas as 5 linhas de VENDAS. Pra aparecer
+   COMPRAS também, rode depois o complemento_fornecedor_compra.sql (ou use
+   este arquivo inteiro, que já tem esses dados).
 */
 SELECT CI.NOME AS CIDADE, 'VENDAS' AS TIPO, ROUND(AVG(V.VALOR_TOTAL), 2) AS MEDIA
 FROM CIDADE CI
@@ -913,6 +918,11 @@ DROP VIEW VW_MOVIMENTO_PRODUTOS;
    5) RODAR ESTE ARQUIVO (ou o script do professor)
       - Abra este .txt, copie TUDO e cole no editor
         (ou Arquivo > Abrir arquivo e escolha o .sql).
+      - Usando os arquivos .sql do repositório, a ordem num banco vazio é:
+          script.sql -> complemento_fornecedor_compra.sql
+          -> apresentacao_cidade_tipo_media.sql
+        (NÃO rode este .txt e o script.sql no mesmo banco: os dois criam
+        as mesmas tabelas e dá "already exists".)
       - Pra rodar o arquivo inteiro: Alt + X (Executar script).
         Ele roda um comando depois do outro, na ordem: cria as tabelas,
         insere os dados e faz as consultas.
